@@ -43,6 +43,12 @@ int main(string[] args)
     auto pairs = getBranchPairs(remotes.front, remotes.back);
 
     foreach (pair; pairs) {
+
+        // Draw the Git history between the head of the branch on one remote
+        // and its head on the other.
+        if (showGraph && pair.relation != BranchRelation.Identical)
+            writeGraph(pair);
+
         string newer, older;
 
         final switch (pair.relation) {
@@ -78,41 +84,6 @@ int main(string[] args)
         assert(newer !is null);
         assert(older !is null);
 
-        // Draw the Git history between the head of the branch on one remote
-        // and its head on the other.
-        if (showGraph) {
-            // Find the shortened SHA1 of the older head
-            auto oldShaRun = execute(["git", "rev-parse", "--short",
-                                      reinsertRemoteName(older, pair.branchName)]);
-            auto oldSha = oldShaRun.output.strip();
-            if (oldShaRun.status != 0) {
-                stderr.writeln("Couldn't get the SHA of ",
-                               reinsertRemoteName(older, pair.branchName),
-                               " to draw graph");
-            }
-            else {
-                writeln("Differing commits for ", pair.branchName, ":");
-                auto graphProcess = pipeProcess(
-                    ["git", "log", "--graph", "--oneline",
-                     "--decorate", "--color=always",
-                     reinsertRemoteName(newer, pair.branchName)],
-                    Redirect.stdout);
-                // We want to kill the process when we leave this scope
-                // since we likely won't run it to completion.
-                scope (exit) { kill(graphProcess.pid); wait(graphProcess.pid); }
-
-                auto graphLines = graphProcess.stdout.byLine();
-
-                // Keep going until we see the old SHA
-                while(!graphLines.front.canFind(oldSha)) {
-                    writeln(graphLines.front);
-                    graphLines.popFront();
-                }
-                // Write the last commit (the older head)
-                writeln(graphLines.front);
-            }
-        }
-
         string pushCommand = buildPushCommand(pair.branchName, newer, older);
 
         if (dryRun) {
@@ -127,6 +98,56 @@ int main(string[] args)
     }
 
     return 0;
+}
+
+void writeGraph(const ref BranchPair pair)
+{
+    string fullAName = reinsertRemoteName(pair.remoteA, pair.branchName);
+    string fullBName = reinsertRemoteName(pair.remoteB, pair.branchName);
+
+    // Find the shortened SHAs
+
+    auto shaRun = execute(["git", "rev-parse", "--short", fullAName]);
+    if (shaRun.status != 0) {
+        stderr.writeln("Couldn't get the SHA of ",
+                       fullAName,
+                       " to draw graph");
+        return;
+    }
+
+    auto shaA = shaRun.output.strip();
+
+    shaRun = execute(["git", "rev-parse", "--short", fullBName]);
+    if (shaRun.status != 0) {
+        stderr.writeln("Couldn't get the SHA of ",
+                       fullBName,
+                       " to draw graph");
+        return;
+    }
+
+    auto shaB = shaRun.output.strip();
+
+    writeln("Differing commits for ", pair.branchName, ":");
+    auto graphProcess = pipeProcess(
+        ["git", "log", "--graph", "--oneline",
+         "--decorate", "--color=always", shaA, shaB],
+        Redirect.stdout);
+    // We want to kill the process when we leave this scope
+    // since we likely won't run it to completion.
+    scope (exit) { kill(graphProcess.pid); wait(graphProcess.pid); }
+
+    auto graphLines = graphProcess.stdout.byLine();
+
+    // Keep going until we see both SHAs
+    bool sawA, sawB;
+
+    do {
+        sawA |= graphLines.front.canFind(shaA);
+        sawB |= graphLines.front.canFind(shaB);
+
+        writeln(graphLines.front);
+        graphLines.popFront();
+    } while (!sawA || !sawB);
 }
 
 /// Takes a branch name string and strips the remote off the front
