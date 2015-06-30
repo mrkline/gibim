@@ -33,6 +33,20 @@ For example, if you create a branch
 delete it from the other so that the tool does not re-add it to the one you just
 deleted from.
 
+## How do I build it?
+
+1. [Get a D compiler.](http://dlang.org/download.html)
+
+2. Run `make`.
+
+## How do I run it?
+
+See `gibim --help`
+
+## That's a terrible name.
+
+Yep. Feel free to suggest a better one.
+
 ## License
 
 zlib (Use it for whatever but don't claim you wrote it.)
