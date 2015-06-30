@@ -9,6 +9,19 @@ import std.typecons;
 
 import std.c.stdlib : exit;
 
+/// Takes a branch name string and strips the remote off the front
+string stripRemoteFromBranch(string branch) pure
+{
+    return branch[branch.indexOf('/') + 1 .. $];
+}
+
+// Opposite of above
+string reinsertRemoteName(string remote, string branch) pure
+{
+    return remote ~ '/' ~ branch;
+}
+
+
 /// We need to make sure we're in a git repo before the fun begins
 void enforceInRepo()
 {
@@ -56,8 +69,10 @@ auto findCommonBranches()
     bool[string] commonMap;
 
     foreach(branch; remoteBranchFinder.stdout.byLine()) {
-        // Strip "remote/" from the front of the branch name
-        string nameWithoutRemote = branch[branch.indexOf('/') + 1 .. $].idup;
+        // The idup (immutable duplicate) is because byLine() returns char[],
+        // and map keys must be immutable, so we need an immutable char[]
+        // (i.e. string)
+        string nameWithoutRemote = stripRemoteFromBranch(branch.idup);
 
         bool* inMap = nameWithoutRemote in commonMap; // map lookup
 
@@ -82,21 +97,31 @@ enum BranchRelation {
 }
 
 struct BranchPair {
-    string a;
-    string b;
+    string branchName;
     BranchRelation relation;
+
+    // We probably don't need to keep carrying around copies of the remote names,
+    // but it arguably makes life easier, is just a pair of pointers for each,
+    // and makes clear what the relation means when it refers to "A" and "B".
+    string remoteA;
+    string remoteB;
 }
 
-BranchPair relateBranches(string branchA, string branchB)
+BranchPair relateBranches(string branchName, string remoteA, string remoteB)
 {
     BranchPair ret;
-    ret.a = branchA;
-    ret.b = branchB;
+    ret.branchName = branchName;
+    ret.remoteA = remoteA;
+    ret.remoteB = remoteB;
 
-    auto runAProcess = pipeProcess(["git", "rev-list", branchA], Redirect.stdout);
+    auto runAProcess = pipeProcess(
+        ["git", "rev-list", reinsertRemoteName(remoteA, branchName)],
+        Redirect.stdout);
     scope(exit) { kill(runAProcess.pid); wait(runAProcess.pid); }
 
-    auto runBProcess = pipeProcess(["git", "rev-list", branchB], Redirect.stdout);
+    auto runBProcess = pipeProcess(
+        ["git", "rev-list", reinsertRemoteName(remoteB, branchName)],
+        Redirect.stdout);
     scope(exit) { kill(runBProcess.pid); wait(runBProcess.pid); }
 
     auto logA = runAProcess.stdout.byLine();
@@ -105,7 +130,7 @@ BranchPair relateBranches(string branchA, string branchB)
     string tipA = logA.front.idup;
     string tipB = logB.front.idup;
 
-    // If both branches have the same HEAD, they're identical.
+    // If both branches have the same head, they're identical.
     if (tipA == tipB) {
         ret.relation = BranchRelation.Identical;
         return ret;
@@ -133,16 +158,11 @@ BranchPair relateBranches(string branchA, string branchB)
 }
 
 /// Returns a range of branch pairs indicating common branches between the two
-/// remotes and their 
+/// remotes and their relation to each other
 auto getBranchPairs(string remoteA, string remoteB)
 {
-    static pure string reinsertRemoteName(string branch, string remote) {
-        return remote ~ '/' ~ branch;
-    }
-
     return findCommonBranches()
-        .map!(b => relateBranches(reinsertRemoteName(b, remoteA),
-                                  reinsertRemoteName(b, remoteB)));
+        .map!(b => relateBranches(b, remoteA, remoteB));
 }
 
 int main()
@@ -154,21 +174,24 @@ int main()
 
     auto pairs = getBranchPairs(remotes.front, remotes.back);
     foreach (pair; pairs) {
+        string fullAName = reinsertRemoteName(pair.remoteA, pair.branchName);
+        string fullBName = reinsertRemoteName(pair.remoteB, pair.branchName);
+
         final switch (pair.relation) {
             case BranchRelation.Identical:
-                writeln(pair.a, " and ", pair.b, " are identical");
+                writeln(fullAName, " and ", fullBName, " are identical");
                 break;
 
             case BranchRelation.Diverged:
-                writeln(pair.a, " and ", pair.b, " have diverged");
+                writeln(fullAName, " and ", fullBName, " have diverged");
                 break;
 
             case BranchRelation.AIsNewer:
-                writeln(pair.a, " is newer than ", pair.b);
+                writeln(fullAName, " is newer than ", fullBName);
                 break;
 
             case BranchRelation.BIsNewer:
-                writeln(pair.b, " is newer than ", pair.a);
+                writeln(fullBName, " is newer than ", fullAName);
                 break;
         }
     }
