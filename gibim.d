@@ -21,18 +21,17 @@ int main(string[] args)
 
     bool verbose;
     bool dryRun;
+    bool showGraph;
 
     getopt(args,
            config.caseSensitive,
            config.bundling,
            "verbose|v", &verbose,
            "dry-run|d", &dryRun,
+           "graph|g", &showGraph,
            "show-unique|u", &showUniqueBranches);
 
     auto pairs = getBranchPairs(remotes.front, remotes.back);
-
-    if (dryRun)
-        writeln("Commands to run:");
 
     foreach (pair; pairs) {
         string newer, older;
@@ -70,14 +69,49 @@ int main(string[] args)
         assert(newer !is null);
         assert(older !is null);
 
-        string commandToRun = buildPushCommand(pair.branchName, newer, older);
+        // Draw the Git history between the head of the branch one one remote
+        // and its head on the other.
+        if (showGraph) {
+            // Find the shortened SHA1 of the older head
+            auto oldShaRun = execute(["git", "rev-parse", "--short",
+                                      reinsertRemoteName(older, pair.branchName)]);
+            auto oldSha = oldShaRun.output.strip();
+            if (oldShaRun.status != 0) {
+                stderr.writeln("Couldn't get the SHA of ",
+                               reinsertRemoteName(older, pair.branchName),
+                               " to draw graph");
+            }
+            else {
+                writeln("Differing commits for ", pair.branchName, ":");
+                auto graphProcess = pipeProcess(
+                    ["git", "log", "--graph", "--oneline",
+                     "--decorate", "--color=always",
+                     reinsertRemoteName(newer, pair.branchName)],
+                    Redirect.stdout);
+                // We want to kill the process when we leave this scope
+                // since we likely won't run it to completion.
+                scope (exit) { kill(graphProcess.pid); wait(graphProcess.pid); }
+
+                auto graphLines = graphProcess.stdout.byLine();
+
+                // Keep going until we see the old SHA
+                while(!graphLines.front.canFind(oldSha)) {
+                    writeln(graphLines.front);
+                    graphLines.popFront();
+                }
+                // Write the last commit (the older head)
+                writeln(graphLines.front);
+            }
+        }
+
+        string pushCommand = buildPushCommand(pair.branchName, newer, older);
 
         if (dryRun) {
-            writeln(commandToRun);
+            writeln("To update ", older, " to ", newer, ", ", pushCommand);
         }
         else {
-            writeln("Running ", commandToRun);
-            auto pid = spawnProcess(commandToRun.split());
+            writeln("Running ", pushCommand);
+            auto pid = spawnProcess(pushCommand.split());
             wait(pid);
             writeln();
         }
@@ -98,6 +132,7 @@ string reinsertRemoteName(string remote, string branch) pure
     return remote ~ '/' ~ branch;
 }
 
+/// Builds a Git command to push "from"'s version of "branch" to "to"
 string buildPushCommand(string branch, string from, string to) pure
 {
     return "git push " ~ to ~ " " ~
@@ -166,11 +201,11 @@ auto findCommonBranches()
 
     foreach(branch; remoteBranches) {
 
-        string fullName = branch.idup;
-
         // The idup (immutable duplicate) is because byLine() returns char[],
         // and map keys must be immutable, so we need an immutable char[]
         // (i.e. string)
+        string fullName = branch.idup;
+
         string nameWithoutRemote = stripRemoteFromBranch(fullName);
 
         string* inMap = nameWithoutRemote in commonMap; // map lookup
@@ -226,6 +261,10 @@ BranchPair relateBranches(string branchName, string remoteA, string remoteB)
     ret.branchName = branchName;
     ret.remoteA = remoteA;
     ret.remoteB = remoteB;
+
+    // To find how branches relate to each other, we'll run "git rev-list"
+    // (basically "git log" with just the SHAs) and look for the head of one
+    // in the history of the other.
 
     auto runAProcess = pipeProcess(
         ["git", "rev-list", reinsertRemoteName(remoteA, branchName)],
