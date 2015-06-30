@@ -9,6 +9,83 @@ import std.typecons;
 
 import std.c.stdlib : exit;
 
+bool showUniqueBranches;
+
+int main(string[] args)
+{
+    import std.getopt;
+
+    enforceInRepo();
+    auto remotes = getRemotes();
+    assert(remotes.length == 2);
+
+    bool verbose;
+    bool dryRun;
+
+    getopt(args,
+           config.caseSensitive,
+           config.bundling,
+           "verbose|v", &verbose,
+           "dry-run|d", &dryRun,
+           "show-unique|u", &showUniqueBranches);
+
+    auto pairs = getBranchPairs(remotes.front, remotes.back);
+
+    if (dryRun)
+        writeln("Commands to run:");
+
+    foreach (pair; pairs) {
+        string newer, older;
+
+        final switch (pair.relation) {
+            case BranchRelation.Identical:
+                if (verbose)
+                    writeln(pair.branchName, " is identical on both remotes");
+                continue;
+
+            case BranchRelation.Diverged:
+                writeln(pair.branchName, " has diverged on the two remotes.");
+                writeln("Please manually merge them.");
+                continue;
+
+            case BranchRelation.AIsNewer:
+                if (verbose) {
+                    writeln(pair.remoteA, " is behind ", pair.remoteB,
+                            " for branch ", pair.branchName);
+                }
+                newer = pair.remoteA;
+                older = pair.remoteB;
+                break;
+
+            case BranchRelation.BIsNewer:
+                if (verbose) {
+                    writeln(pair.remoteB, " is behind ", pair.remoteA,
+                            " for branch ", pair.branchName);
+                }
+                newer = pair.remoteB;
+                older = pair.remoteA;
+                break;
+        }
+
+        assert(newer !is null);
+        assert(older !is null);
+
+        string commandToRun = buildPushCommand(pair.branchName, newer, older);
+
+        if (dryRun) {
+            writeln(commandToRun);
+        }
+        else {
+            writeln("Running ", commandToRun);
+            auto pid = spawnProcess(commandToRun.split());
+            wait(pid);
+            writeln();
+        }
+    }
+
+    return 0;
+}
+
 /// Takes a branch name string and strips the remote off the front
 string stripRemoteFromBranch(string branch) pure
 {
@@ -19,6 +96,12 @@ string stripRemoteFromBranch(string branch) pure
 string reinsertRemoteName(string remote, string branch) pure
 {
     return remote ~ '/' ~ branch;
+}
+
+string buildPushCommand(string branch, string from, string to) pure
+{
+    return "git push " ~ to ~ " " ~
+        reinsertRemoteName(from, branch) ~ ":" ~ branch;
 }
 
 
@@ -65,26 +148,56 @@ auto findCommonBranches()
     scope (failure) kill(remoteBranchFinder.pid);
     scope (exit) wait(remoteBranchFinder.pid);
 
-    // We'll keep track of branches we've seen
-    bool[string] commonMap;
+    // We'll keep track of branches we've seen twice with this map.
+    // When we first see a branch, we'll put its full name (with remote)
+    // in the map as the value with the shared name (without remote) as the key.
+    // Then, if we see the same branch on the other remote, we'll null the value.
+    // The reason we use this wonky scheme instead of a bool as the value
+    // is so that we can hold onto the full names for when showUniqueBranches
+    // is true.
+    string[string] commonMap;
 
-    foreach(branch; remoteBranchFinder.stdout.byLine()) {
+    auto remoteBranches = remoteBranchFinder.stdout
+        .byLine()
+        // Filter out tracking branches (e.g. origin/HEAD -> origin/something)
+        .filter!(b => !b.canFind("->"))
+        // git branch -r puts whitespace on the left. Strip that.
+        .map!(b => stripLeft(b));
+
+    foreach(branch; remoteBranches) {
+
+        string fullName = branch.idup;
+
         // The idup (immutable duplicate) is because byLine() returns char[],
         // and map keys must be immutable, so we need an immutable char[]
         // (i.e. string)
-        string nameWithoutRemote = stripRemoteFromBranch(branch.idup);
+        string nameWithoutRemote = stripRemoteFromBranch(fullName);
 
-        bool* inMap = nameWithoutRemote in commonMap; // map lookup
+        string* inMap = nameWithoutRemote in commonMap; // map lookup
 
         if (inMap) // If the map contains the branch, mark that we found it twice.
-            *inMap = true;
-        else // Otherwise create an entry in the map.
-            commonMap[nameWithoutRemote] = false;
+            *inMap = null;
+        else // Otherwise store the full (unstripped) branch name
+            commonMap[nameWithoutRemote] = fullName;
+    }
+
+    if (showUniqueBranches) {
+        auto uniqueBranches = commonMap.byKeyValue()
+            // See commonMap comment
+            .filter!(p => p.value !is null)
+            .map!(p => p.value);
+
+        writeln("Branches unique to one remote:");
+
+        foreach (unique; uniqueBranches)
+            writeln(unique);
+
+        writeln();
     }
 
     return commonMap.byKeyValue()
         // Filter out branch names which were not seen twice
-        .filter!(p => p.value == true)
+        .filter!(p => p.value is null)
         // Get the branch name, discard the bool
         .map!(p => p.key);
 }
@@ -163,38 +276,4 @@ auto getBranchPairs(string remoteA, string remoteB)
 {
     return findCommonBranches()
         .map!(b => relateBranches(b, remoteA, remoteB));
-}
-
-int main()
-{
-
-    enforceInRepo();
-    auto remotes = getRemotes();
-    assert(remotes.length == 2);
-
-    auto pairs = getBranchPairs(remotes.front, remotes.back);
-    foreach (pair; pairs) {
-        string fullAName = reinsertRemoteName(pair.remoteA, pair.branchName);
-        string fullBName = reinsertRemoteName(pair.remoteB, pair.branchName);
-
-        final switch (pair.relation) {
-            case BranchRelation.Identical:
-                writeln(fullAName, " and ", fullBName, " are identical");
-                break;
-
-            case BranchRelation.Diverged:
-                writeln(fullAName, " and ", fullBName, " have diverged");
-                break;
-
-            case BranchRelation.AIsNewer:
-                writeln(fullAName, " is newer than ", fullBName);
-                break;
-
-            case BranchRelation.BIsNewer:
-                writeln(fullBName, " is newer than ", fullAName);
-                break;
-        }
-    }
-
-    return 0;
 }
