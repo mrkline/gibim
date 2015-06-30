@@ -9,6 +9,8 @@ import std.typecons;
 
 import std.c.stdlib : exit;
 
+import help;
+
 bool showUniqueBranches;
 
 int main(string[] args)
@@ -23,13 +25,20 @@ int main(string[] args)
     bool dryRun;
     bool showGraph;
 
-    getopt(args,
-           config.caseSensitive,
-           config.bundling,
-           "verbose|v", &verbose,
-           "dry-run|d", &dryRun,
-           "graph|g", &showGraph,
-           "show-unique|u", &showUniqueBranches);
+    try {
+        getopt(args,
+               config.caseSensitive,
+               config.bundling,
+               "help|h", { writeAndSucceed(helpText); },
+               "version", { writeAndSucceed(versionString); },
+               "dry-run|d", &dryRun,
+               "show-unique|u", &showUniqueBranches,
+               "graph|g", &showGraph,
+               "verbose|v", &verbose);
+    }
+    catch (GetOptException ex) {
+        writeAndFail(ex.msg, "\n\n", helpText);
+    }
 
     auto pairs = getBranchPairs(remotes.front, remotes.back);
 
@@ -69,7 +78,7 @@ int main(string[] args)
         assert(newer !is null);
         assert(older !is null);
 
-        // Draw the Git history between the head of the branch one one remote
+        // Draw the Git history between the head of the branch on one remote
         // and its head on the other.
         if (showGraph) {
             // Find the shortened SHA1 of the older head
@@ -148,8 +157,7 @@ void enforceInRepo()
 
     // If it fails, we're not in a repo.
     if (rootFinder.status != 0 || rootFinder.output.strip().empty) {
-        stderr.writeln("Not in a Git repo");
-        exit(1);
+        writeAndFail("Not in a Git repo");
     }
 }
 
@@ -165,8 +173,7 @@ auto getRemotes()
         .map!(c => 1).sum();
 
     if (remoteFinder.status != 0 || lineCount != 2) {
-        stderr.writeln("The repo must have exactly two remotes (has ", lineCount, ")");
-        exit(1);
+        writeAndFail("The repo must have exactly two remotes (has ", lineCount, ")");
     }
 
     // Pull out the first (and only) two
