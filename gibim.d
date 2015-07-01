@@ -17,10 +17,6 @@ int main(string[] args)
 {
     import std.getopt;
 
-    enforceInRepo();
-    auto remotes = getRemotes();
-    assert(remotes.length == 2);
-
     bool verbose;
     bool dryRun;
     bool showGraph;
@@ -39,6 +35,10 @@ int main(string[] args)
     catch (GetOptException ex) {
         writeAndFail(ex.msg, "\n\n", helpText);
     }
+
+    enforceInRepo();
+    auto remotes = getRemotes();
+    assert(remotes.length == 2);
 
     auto pairs = getBranchPairs(remotes.front, remotes.back);
 
