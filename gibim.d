@@ -250,12 +250,18 @@ auto findCommonBranches()
             .filter!(p => p.value !is null)
             .map!(p => p.value);
 
-        writeln("Branches unique to one remote:");
+        if (!uniqueBranches.empty())
+            writeln("Branches unique to one remote:");
 
-        foreach (unique; uniqueBranches)
+        bool wroteOne = false;
+
+        foreach (unique; uniqueBranches) {
             writeln(unique);
+            wroteOne = true;
+        }
 
-        writeln();
+        if (wroteOne)
+            writeln();
     }
 
     return commonMap.byKeyValue()
