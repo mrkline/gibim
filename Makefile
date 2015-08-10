@@ -1,14 +1,18 @@
 DC = dmd
+DFLAGS = -w -wi
 
 all: debug
 
-debug:
-	$(DC) -w -wi -debug -unittest -ofgibim *.d
+debug: DFLAGS += -debug -unittest -g
+debug: gibim
 
-release:
-	$(DC) -w -wi -release -O -ofgibim *.d
+release: DFLAGS += -release -O
+release: gibim
+
+gibim: gibim.d help.d
+	$(DC) $(DFLAGS) -of$@ $^
 
 clean:
 	rm -f gibim *.o
 
-.PHONY: clean, debug, release
+.PHONY: all, clean, debug, release
