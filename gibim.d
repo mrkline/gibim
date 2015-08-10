@@ -190,8 +190,7 @@ auto getRemotes()
 
     // We should have two of them
     immutable lineCount = remoteFinder.output
-        .filter!(c => c == '\n')
-        .map!(c => 1).sum();
+        .count!(c => c == '\n');
 
     if (remoteFinder.status != 0 || lineCount != 2) {
         writeAndFail("The repo must have exactly two remotes (has ", lineCount, ")");
